@@ -13,6 +13,11 @@ query TournamentPhaseGroupSetsQuery($id: ID!, $page: Int!, $perPage: Int!) {
 				state
 				slots {
 					prereqType
+					prereqId
+					prereqPlacement
+					entrant {
+						id
+					}
 				}
 			}
 		}

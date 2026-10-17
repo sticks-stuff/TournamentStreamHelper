@@ -84,6 +84,10 @@ class BracketSetWidget(QWidget):
 
             if self.bracketSet.pos[0] < 0 and hasBye:
                 self.hide()
+            elif self.bracketSet.bracket.hasImportedTopology and self.bracketSet.pos[0] < 0 and all(
+                playerId == BracketSet.BYE for playerId in self.bracketSet.playerIds
+            ):
+                self.hide()
             elif self.bracketSet.pos[0] > 0 and self.bracketSet.pos[0] == 1 and hasBye:
                 self.hide()
             else:
@@ -236,6 +240,10 @@ class BracketSetWidget(QWidget):
 
             if self.bracketSet.pos[0] < 0 and hasBye:
                 self.hide()
+            elif self.bracketSet.bracket.hasImportedTopology and self.bracketSet.pos[0] < 0 and all(
+                playerId == BracketSet.BYE for playerId in self.bracketSet.playerIds
+            ):
+                self.hide()
             elif self.bracketSet.pos[0] > 0 and self.bracketSet.pos[0] == 1 and hasBye:
                 self.hide()
             else:
@@ -295,6 +303,14 @@ class TSHBracketView(QGraphicsView):
     def GetCutouts(self, forExport=False):
         winnersRounds = [r for r in self.bracket.rounds.keys() if int(r) > 0]
         losersRounds = [r for r in self.bracket.rounds.keys() if int(r) < 0]
+
+        if self.bracket.hasImportedTopology:
+            winnersCutout = [0, max((int(r) for r in winnersRounds), default=0) + 1]
+            losersCutout = [
+                self.bracket.GetLeadingLosersByeRounds(),
+                max((abs(int(r)) for r in losersRounds), default=0) + 1,
+            ]
+            return (winnersCutout, losersCutout)
 
         winnersCutout = [0, len(winnersRounds)+1]
         losersCutout = [0, len(losersRounds)+1]
@@ -567,22 +583,28 @@ class TSHBracketView(QGraphicsView):
                 # print(f"Round pos {bracketSet.pos} L→ {nextLose}")
 
                 # Reassign rounds based on export number
-                if nextWin:
-                    if nextWin[0] > 0:
-                        nextWin[0] -= winnersOffset
-                    else:
-                        nextWin[0] += losersOffset - 2
-                if nextLose:
-                    if nextLose[0] < 0:
-                        nextLose[0] += losersOffset - 2
-
-                        """if self.bracket.progressionsIn <= 0:
-                            nextLose[0] -= 1
+                if self.bracket.hasImportedTopology:
+                    if nextWin:
+                        if nextWin[0] > 0:
+                            nextWin[0] -= winnersOffset
                         else:
-                            nextLose[0] -= 2"""
-                    # For grand finals into reset, nextLose is a positive round
-                    else:
-                        nextLose[0] -= winnersOffset
+                            nextWin[0] += losersOffset
+                    if nextLose:
+                        if nextLose[0] < 0:
+                            nextLose[0] += losersOffset
+                        else:
+                            nextLose[0] -= winnersOffset
+                else:
+                    if nextWin:
+                        if nextWin[0] > 0:
+                            nextWin[0] -= winnersOffset
+                        else:
+                            nextWin[0] += losersOffset - 2
+                    if nextLose:
+                        if nextLose[0] < 0:
+                            nextLose[0] += losersOffset - 2
+                        else:
+                            nextLose[0] -= winnersOffset
 
                 p1name = ""
 
@@ -629,6 +651,72 @@ class TSHBracketView(QGraphicsView):
             self._scene.removeItem(element)
 
         self.bracketLines = []
+
+        if self.bracket.hasImportedTopology:
+            widgetsBySet = {
+                id(setWidget.bracketSet): setWidget
+                for roundWidgets in self.bracketWidgets
+                for setWidget in roundWidgets
+            }
+            path = QPainterPath()
+            exitPath = QPainterPath()
+
+            for setWidget in widgetsBySet.values():
+                if setWidget.isHidden():
+                    continue
+
+                bracketSet = setWidget.bracketSet
+                for target in (bracketSet.winNext, bracketSet.loseNext):
+                    targetWidget = widgetsBySet.get(id(target)) if target else None
+                    if targetWidget is None or targetWidget.isHidden():
+                        continue
+                    if (bracketSet.pos[0] < 0) != (target.pos[0] < 0):
+                        continue
+
+                    start = QPointF(
+                        setWidget.mapTo(self.bracketLayout, QPoint(0, 0)).x() + setWidget.width(),
+                        setWidget.mapTo(self.bracketLayout, QPoint(0, 0)).y() + setWidget.height() / 2,
+                    )
+                    end = QPointF(
+                        targetWidget.mapTo(self.bracketLayout, QPoint(0, 0)).x(),
+                        targetWidget.mapTo(self.bracketLayout, QPoint(0, 0)).y() + targetWidget.height() / 2,
+                    )
+                    if end.x() <= start.x():
+                        continue
+
+                    midpoint = (start.x() + end.x()) / 2
+                    path.moveTo(start)
+                    path.lineTo(QPointF(midpoint, start.y()))
+                    path.lineTo(QPointF(midpoint, end.y()))
+                    path.lineTo(end)
+
+            if self.progressionsOut > 0:
+                positiveRounds = [int(roundKey) for roundKey in self.bracket.rounds if int(roundKey) > 0]
+                negativeRounds = [int(roundKey) for roundKey in self.bracket.rounds if int(roundKey) < 0]
+                terminalRounds = set()
+                if positiveRounds:
+                    terminalRounds.add(max(positiveRounds))
+                if negativeRounds:
+                    terminalRounds.add(min(negativeRounds))
+
+                for setWidget in widgetsBySet.values():
+                    bracketSet = setWidget.bracketSet
+                    if setWidget.isHidden() or bracketSet.pos[0] not in terminalRounds or bracketSet.winNext:
+                        continue
+
+                    origin = setWidget.mapTo(self.bracketLayout, QPoint(0, 0))
+                    start = QPointF(origin.x() + setWidget.width(), origin.y() + setWidget.height() / 2)
+                    tip = start + QPointF(42, 0)
+                    exitPath.moveTo(start)
+                    exitPath.lineTo(tip)
+                    exitPath.moveTo(tip + QPointF(-9, -7))
+                    exitPath.lineTo(tip)
+                    exitPath.lineTo(tip + QPointF(-9, 7))
+
+            for pen in (QPen(Qt.black, 6, Qt.SolidLine), QPen(Qt.gray, 4, Qt.SolidLine)):
+                self.bracketLines.append(self._scene.addPath(path, pen))
+                self.bracketLines.append(self._scene.addPath(exitPath, pen))
+            return
 
         path = QPainterPath()
         dashedPath = QPainterPath()
@@ -788,6 +876,8 @@ class TSHBracketView(QGraphicsView):
     def fitInView(self):
         rect = QRectF(self.bracketLayout.rect())
         if not rect.isNull():
+            if self.bracket.hasImportedTopology and self.progressionsOut > 0:
+                rect.adjust(0, 0, 50, 0)
             self.setSceneRect(rect)
             unity = self.transform().mapRect(QRectF(0, 0, 1, 1))
             self.scale(1 / unity.width(), 1 / unity.height())
