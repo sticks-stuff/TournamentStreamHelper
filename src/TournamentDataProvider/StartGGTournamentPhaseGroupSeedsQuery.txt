@@ -1,5 +1,8 @@
 query TournamentPhaseGroupSeedsQuery($id: ID!, $page: Int!, $perPage: Int!) {
 	phaseGroup(id: $id) {
+		phase {
+			id
+		}
 		seedMap
 		seeds(query: {page: $page, perPage: $perPage}) {
 			pageInfo {
@@ -8,6 +11,10 @@ query TournamentPhaseGroupSeedsQuery($id: ID!, $page: Int!, $perPage: Int!) {
 			nodes {
 				seedNum
 				progressionSource {
+					placeholderName
+					originPhase {
+						id
+					}
 					originPhaseGroup {
 						id
 					}
@@ -46,6 +53,8 @@ query TournamentPhaseGroupSeedsQuery($id: ID!, $page: Int!, $perPage: Int!) {
 		}
 		progressionsOut {
 			id
+			originPlacement
+			placeholderName
 		}
 	}
 }

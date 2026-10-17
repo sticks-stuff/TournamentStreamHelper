@@ -48,6 +48,8 @@ class StartGGDataProvider(TournamentDataProvider):
         super().__init__(url, threadpool, tshTdp)
         self.name = "StartGG"
         self._mains_cache = {}
+        self._phase_names = {}
+        self._phase_group_phase_ids = {}
 
     # Queries the provided URL until a proper 200 status code has been provided back
     #
@@ -178,6 +180,7 @@ class StartGGDataProvider(TournamentDataProvider):
             logger.info(data)
 
             for phase in deep_get(data, "data.event.phases", []):
+                self._phase_names[str(phase.get("id"))] = phase.get("name", "")
                 phaseObj = {
                     "id": phase.get("id"),
                     "name": phase.get("name"),
@@ -185,6 +188,7 @@ class StartGGDataProvider(TournamentDataProvider):
                 }
 
                 for phaseGroup in deep_get(phase, "phaseGroups.nodes", []):
+                    self._phase_group_phase_ids[str(phaseGroup.get("id"))] = phase.get("id")
                     phaseObj["groups"].append({
                         "id": phaseGroup.get("id"),
                         "name": TSHLocaleHelper.phaseNames.get("group").format(phaseGroup.get('displayIdentifier')),
@@ -201,6 +205,7 @@ class StartGGDataProvider(TournamentDataProvider):
         seeds = []
         seedMap = None
         progressionsOut = None
+        phaseId = None
         page = 1
         totalPages = 1
 
@@ -228,9 +233,10 @@ class StartGGDataProvider(TournamentDataProvider):
                     f"TournamentPhaseGroupSeedsQuery returned no phaseGroup for id {id} (page {page}): {seedsData}")
 
             if page == 1:
+                phaseId = deep_get(seedsData, "data.phaseGroup.phase.id")
                 seedMap = deep_get(seedsData, "data.phaseGroup.seedMap.1")
                 progressionsOut = deep_get(
-                    seedsData, "data.phaseGroup.progressionsOut")
+                    seedsData, "data.phaseGroup.progressionsOut", [])
 
             seeds.extend(
                 deep_get(seedsData, "data.phaseGroup.seeds.nodes", []))
@@ -239,7 +245,12 @@ class StartGGDataProvider(TournamentDataProvider):
                 seedsData, "data.phaseGroup.seeds.pageInfo.totalPages", 1)
             page += 1
 
-        return {"seeds": seeds, "seedMap": seedMap, "progressionsOut": progressionsOut}
+        return {
+            "seeds": seeds,
+            "seedMap": seedMap,
+            "progressionsOut": progressionsOut,
+            "phaseId": phaseId,
+        }
 
     def _FetchPhaseGroupSets(self, id, progress_callback=None, cancel_event=None):
         sets = []
@@ -284,6 +295,124 @@ class StartGGDataProvider(TournamentDataProvider):
             type=requests.get
         )
 
+    def _FetchPhaseProgressions(self, phaseId):
+        if not phaseId:
+            return []
+
+        data = self.QueryRequests(
+            f"https://www.start.gg/api/-/rest/phase/{phaseId}?expand[0]=bracketSetup&expand[1]=phaseLink",
+            type=requests.get
+        )
+
+        nodes = []
+        pending = [data]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                nodes.append(value)
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+
+        summaries = [
+            node for node in nodes
+            if node.get("destPhaseId") is not None
+            and node.get("losses") is not None
+            and node.get("count") is not None
+        ]
+        links = [
+            node for node in nodes
+            if str(node.get("originPhaseId")) == str(phaseId)
+            and node.get("destPhaseId") is not None
+            and node.get("originLosses") is not None
+        ]
+
+        progressions = []
+        seen = set()
+        for link in links:
+            key = (link.get("id"), link.get("destPhaseId"), link.get("originLosses"))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            losses = link.get("originLosses", 0)
+            summary = next((
+                item for item in summaries
+                if str(item.get("destPhaseId")) == str(link.get("destPhaseId"))
+                and str(item.get("losses")) == str(losses)
+            ), {})
+            destinationId = link.get("destPhaseId")
+            phaseName = self._GetPhaseName(destinationId)
+            progressions.append({
+                "id": link.get("id"),
+                "name": phaseName,
+                "phaseId": destinationId,
+                "phaseName": phaseName,
+                "originLosses": losses,
+                "originPlacement": link.get("originPlacement"),
+                "count": summary.get("count", link.get("numSeeds", 0)),
+            })
+
+        if not progressions:
+            for summary in summaries:
+                destinationId = summary.get("destPhaseId")
+                phaseName = self._GetPhaseName(destinationId)
+                progressions.append({
+                    "name": phaseName,
+                    "phaseId": destinationId,
+                    "phaseName": phaseName,
+                    "originLosses": summary.get("losses", 0),
+                    "count": summary.get("count", 0),
+                })
+
+        progressions.sort(key=lambda progression: (
+            int(progression.get("originLosses", 0) or 0),
+            int(progression.get("originPlacement", 0) or 0),
+        ))
+        return progressions
+
+    def _GetPhaseName(self, phaseId):
+        if not phaseId:
+            return ""
+
+        phaseName = self._phase_names.get(str(phaseId))
+        if phaseName:
+            return phaseName
+
+        data = self.QueryRequests(
+            f"https://www.start.gg/api/-/rest/phase/{phaseId}",
+            type=requests.get
+        )
+        phaseName = deep_get(data, "entities.phase.name", "")
+        if phaseName:
+            self._phase_names[str(phaseId)] = phaseName
+        return phaseName
+
+    def _FetchIncomingProgressionSides(self, phaseId, originPhaseIds):
+        sides = {}
+        for originPhaseId in set(originPhaseIds):
+            if not originPhaseId:
+                continue
+
+            data = self.QueryRequests(
+                f"https://www.start.gg/api/-/rest/phase/{originPhaseId}?expand[0]=bracketSetup&expand[1]=phaseLink",
+                type=requests.get
+            )
+            links = [
+                link for link in deep_get(data, "entities.phaseLink", []) or []
+                if str(link.get("destPhaseId")) == str(phaseId)
+            ]
+            for link in links:
+                side = link.get("destBracketSide")
+                if side is not None:
+                    sides.setdefault(str(originPhaseId), []).append({
+                        "side": side,
+                        "name": link.get("name", ""),
+                        "originLosses": link.get("originLosses"),
+                    })
+
+        return sides
+
     def GetTournamentPhaseGroup(self, id, progress_callback=None, cancel_event=None):
         finalData = {}
 
@@ -312,8 +441,51 @@ class StartGGDataProvider(TournamentDataProvider):
 
             seeds = (seedsResult or {}).get("seeds", [])
             seedMap = (seedsResult or {}).get("seedMap")
-            progressionsOut = (seedsResult or {}).get("progressionsOut")
+            phaseId = (
+                (seedsResult or {}).get("phaseId")
+                or deep_get(oldData, "entities.groups.phaseId")
+                or self._phase_group_phase_ids.get(str(id))
+            )
+            progressionsOut = self._FetchPhaseProgressions(phaseId)
+            graphQLProgressionsOut = (seedsResult or {}).get("progressionsOut") or []
+            if graphQLProgressionsOut:
+                outputRecords = []
+                for graphQLProgression in graphQLProgressionsOut:
+                    placeholderName = graphQLProgression.get("placeholderName") or ""
+                    originPlacement = graphQLProgression.get("originPlacement")
+                    isLosersSide = "loser" in placeholderName.casefold()
+                    matchingLink = next((
+                        progression for progression in progressionsOut
+                        if str(progression.get("originPlacement")) == str(originPlacement)
+                        and (int(progression.get("originLosses", 0) or 0) > 0) == isLosersSide
+                    ), None)
+                    if matchingLink is None:
+                        matchingLink = next((
+                            progression for progression in progressionsOut
+                            if str(progression.get("originPlacement")) == str(originPlacement)
+                        ), None)
+
+                    output = dict(matchingLink or {})
+                    output.update({
+                        "id": graphQLProgression.get("id"),
+                        "linkId": (matchingLink or {}).get("id"),
+                        "placeholderName": placeholderName,
+                        "originPlacement": originPlacement,
+                    })
+                    if matchingLink is None:
+                        output["name"] = ""
+                        output["originLosses"] = 1 if isLosersSide else 0
+                    outputRecords.append(output)
+                progressionsOut = outputRecords
+            else:
+                expandedProgressionsOut = []
+                for progression in progressionsOut:
+                    expandedProgressionsOut.extend(
+                        [dict(progression) for _ in range(max(1, int(progression.get("count", 1) or 1)))]
+                    )
+                progressionsOut = expandedProgressionsOut
             sets = (setsResult or {}).get("sets", [])
+            print(oldData)
 
             seeds.sort(key=lambda s: s.get("seedNum"))
 
@@ -370,13 +542,42 @@ class StartGGDataProvider(TournamentDataProvider):
 
             finalData["sets"] = finalSets
 
+            originPhaseIds = [
+                deep_get(seed, "progressionSource.originPhase.id")
+                or deep_get(seed, "progressionSource.originPhaseGroup.phase.id")
+                for seed in seeds
+                if seed.get("progressionSource")
+            ]
+            incomingSides = self._FetchIncomingProgressionSides(phaseId, originPhaseIds)
             finalData["progressionsIn"] = []
+            for entrantNumber, s in enumerate(seeds, 1):
+                progressionSource = s.get("progressionSource") or {}
+                if not progressionSource:
+                    continue
 
-            for s in seeds:
-                originPhaseId = deep_get(
-                    s, "progressionSource.originPhaseGroup.id")
-                if originPhaseId:
-                    finalData["progressionsIn"].append(originPhaseId)
+                originPhaseId = (
+                    deep_get(progressionSource, "originPhase.id")
+                    or deep_get(progressionSource, "originPhaseGroup.phase.id")
+                )
+                sourceLinks = incomingSides.get(str(originPhaseId), [])
+                placeholderName = progressionSource.get("placeholderName", "")
+                sideHint = "losers" if "loser" in placeholderName.casefold() else "winners"
+                matchingLink = next((
+                    link for link in sourceLinks
+                    if sideHint in link.get("name", "").casefold()
+                ), None)
+                if matchingLink is None and sourceLinks:
+                    matchingLink = sourceLinks[0]
+
+                finalData["progressionsIn"].append({
+                    "originPhaseId": originPhaseId,
+                    "originPhaseGroupId": deep_get(
+                        progressionSource, "originPhaseGroup.id"),
+                    "placeholderName": placeholderName,
+                    "seedNum": s.get("seedNum"),
+                    "entrantNumber": entrantNumber,
+                    "destBracketSide": matchingLink.get("side") if matchingLink else None,
+                })
 
             finalData["winnersOnlyProgressions"] = deep_get(
                 oldData, "entities.groups.hasCustomWinnerByes")
@@ -423,6 +624,7 @@ class StartGGDataProvider(TournamentDataProvider):
         except:
             logger.error(traceback.format_exc())
 
+        print(finalData)
         return finalData
 
     def GetMatch(self, setId, progress_callback=None, cancel_event=None):

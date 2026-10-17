@@ -18,6 +18,8 @@ class BracketSet():
         self.loseNextSlot: int = 0
         self.pos = pos
         self.finished = False
+        self.progressionsInNames = []
+        self.progressionsOutNames = []
 
 # Bracket always has a power of 2 number of players
 # if there are less than that, we round up and add
@@ -61,6 +63,8 @@ class Bracket():
 
         self.progressionsIn = progressionsIn
         self.progressionsOut = progressionsOut
+        self.progressionsInLabels = []
+        self.progressionsOutLabels = []
 
         if seedMap:
             if len(seedMap) < self.playerNumber:

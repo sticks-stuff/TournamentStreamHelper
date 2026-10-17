@@ -64,6 +64,15 @@ class BracketSetWidget(QWidget):
         self.layout().addWidget(self.finished)
         self.finished.toggled.connect(lambda newVal: self.SetFinished(newVal))
 
+        self.progressionInFields = self._CreateProgressionFieldGroup("In")
+        self.progressionOutFields = self._CreateProgressionFieldGroup("Out")
+        self.progressionFieldLayout = QWidget()
+        self.progressionFieldLayout.setLayout(QVBoxLayout())
+        self.progressionFieldLayout.layout().setContentsMargins(0, 0, 0, 0)
+        self.progressionFieldLayout.layout().addWidget(self.progressionInFields[0])
+        self.progressionFieldLayout.layout().addWidget(self.progressionOutFields[0])
+        self.layout().addWidget(self.progressionFieldLayout)
+
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         self.sizePolicy().setRetainSizeWhenHidden(True)
         self.layout().setSpacing(2)
@@ -79,6 +88,61 @@ class BracketSetWidget(QWidget):
                 self.hide()
             else:
                 self.show()
+
+        self._UpdateProgressionFields()
+
+    def _CreateProgressionFieldGroup(self, label):
+        group = QWidget()
+        group.setLayout(QHBoxLayout())
+        group.layout().setContentsMargins(0, 0, 0, 0)
+        group.layout().addWidget(QLabel(f"{label}:"))
+        return group, []
+
+    def _UpdateProgressionFields(self):
+        if self.bracketSet is None:
+            self.progressionFieldLayout.hide()
+            return
+
+        for fieldName, (group, boxes), label in (
+            ("progressionsInNames", self.progressionInFields, "Progression in"),
+            ("progressionsOutNames", self.progressionOutFields, "Progression out"),
+        ):
+            values = getattr(self.bracketSet, fieldName)
+            while len(boxes) < len(values):
+                index = len(boxes)
+                textBox = QLineEdit()
+                textBox.setMinimumWidth(72)
+                textBox.setMaximumWidth(160)
+                textBox.setPlaceholderText(label)
+                textBox.textChanged.connect(
+                    lambda value, index=index, fieldName=fieldName:
+                    self._SetProgressionText(fieldName, index, value)
+                )
+                group.layout().addWidget(textBox)
+                boxes.append(textBox)
+
+            while len(boxes) > len(values):
+                textBox = boxes.pop()
+                group.layout().removeWidget(textBox)
+                textBox.deleteLater()
+
+            for index, textBox in enumerate(boxes):
+                if textBox.text() != values[index]:
+                    textBox.blockSignals(True)
+                    textBox.setText(values[index])
+                    textBox.blockSignals(False)
+
+            group.setVisible(bool(values))
+
+        self.progressionFieldLayout.setVisible(
+            bool(self.bracketSet.progressionsInNames or self.bracketSet.progressionsOutNames)
+        )
+
+    def _SetProgressionText(self, fieldName, index, value):
+        values = getattr(self.bracketSet, fieldName)
+        if index < len(values):
+            values[index] = value
+            self.bracketView.Update()
 
     def SetScore(self, id, score, updateDisplay=True):
         self.bracketSet.score[id] = score
@@ -162,6 +226,8 @@ class BracketSetWidget(QWidget):
                 self.finished.blockSignals(True)
                 self.finished.setChecked(self.bracketSet.finished)
                 self.finished.blockSignals(False)
+
+            self._UpdateProgressionFields()
 
             winnersCutout, losersCutout = self.bracketView.GetCutouts()
             hasBye = \
@@ -430,6 +496,8 @@ class TSHBracketView(QGraphicsView):
                          self.bracket.progressionsIn)
         StateManager.Set("bracket.bracket.progressionsOut",
                          self.bracketWidget.progressionsOut.value())
+        StateManager.Unset("bracket.bracket.progressionsInNames")
+        StateManager.Unset("bracket.bracket.progressionsOutNames")
 
         limitExportNumber, winnersOffset, losersOffset = self.GetLimitedExportingBracketOffsets()
         winnersCutout, losersCutout = self.GetCutouts(forExport=True)
@@ -549,7 +617,9 @@ class TSHBracketView(QGraphicsView):
                         p1name,
                         p2name
                     ],
-                    "completed": bracketSet.finished
+                    "completed": bracketSet.finished,
+                    "progressionsIn": bracketSet.progressionsInNames,
+                    "progressionsOut": bracketSet.progressionsOutNames,
                 }
 
         StateManager.Set("bracket.bracket.rounds", data)

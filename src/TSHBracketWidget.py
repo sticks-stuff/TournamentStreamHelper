@@ -46,6 +46,8 @@ class TSHBracketWidget(QDockWidget):
         # event loop; see UpdatePhaseGroup.
         self.updatingPhaseGroup = False
         self.pendingPhaseGroupData = None
+        self.progressionsInLabels = []
+        self.progressionsOutLabels = []
 
         TSHTournamentDataProvider.instance.signals.tournament_phases_updated.connect(
             self.UpdatePhases)
@@ -266,6 +268,10 @@ class TSHBracketWidget(QDockWidget):
     def RebuildBracket(self, playerNumber, seedMap=None, customSeeding=False):
         self.bracket = Bracket(playerNumber, self.progressionsIn.value(
         ), seedMap, self.winnersOnly.isChecked(), progressionsOut=self.progressionsOut.value())
+        self.bracket.progressionsInLabels = getattr(
+            self, "progressionsInLabels", [])
+        self.bracket.progressionsOutLabels = getattr(
+            self, "progressionsOutLabels", [])
 
         self.bracketView.SetBracket(
             self.bracket,
@@ -280,6 +286,9 @@ class TSHBracketWidget(QDockWidget):
                 _set.score[0] = -1
                 _set.score[1] = -1
                 _set.finished = False
+
+        self.AssignProgressionsToSets()
+        self.bracketView.Update()
 
     def UpdatePhaseGroup(self, phaseGroupData):
         # This method pumps the event loop (processEvents) while it runs, so a
@@ -329,6 +338,9 @@ class TSHBracketWidget(QDockWidget):
                 logger.warning(
                     "Phase group fetch looks partial (no entrants but sets present); skipping bracket rebuild")
                 return
+
+            self.progressionsInLabels = phaseGroupData.get("progressionsIn") or []
+            self.progressionsOutLabels = phaseGroupData.get("progressionsOut") or []
 
             if phaseGroupData.get("progressionsIn", {}) != None:
                 self.progressionsIn.setValue(
@@ -392,6 +404,7 @@ class TSHBracketWidget(QDockWidget):
 
             QGuiApplication.processEvents()
             self.bracket.UpdateBracket()
+            self.AssignProgressionsToSets()
             self.bracketView.Update()
         except:
             logger.error(traceback.format_exc())
@@ -399,6 +412,140 @@ class TSHBracketWidget(QDockWidget):
             if reconnectDataChanged:
                 self.playerList.signals.DataChanged.connect(
                     self.bracketView.Update)
+
+    def AssignProgressionsToSets(self):
+        self.bracket.UpdateBracket()
+        for roundSets in self.bracket.rounds.values():
+            for bracketSet in roundSets:
+                bracketSet.progressionsInNames.clear()
+                bracketSet.progressionsOutNames.clear()
+
+        winnersCutout, losersCutout = self.bracketView.GetCutouts()
+        visibleWinnerRounds = sorted(
+            (int(roundKey) for roundKey in self.bracket.rounds
+             if int(roundKey) > winnersCutout[0]
+             and int(roundKey) < winnersCutout[1])
+        )
+        visibleLoserRounds = sorted(
+            (int(roundKey) for roundKey in self.bracket.rounds
+             if int(roundKey) < 0
+             and abs(int(roundKey)) > losersCutout[0]
+             and abs(int(roundKey)) < losersCutout[1]),
+            key=abs,
+        )
+
+        loserEntrantNumbers = sorted({
+            int(progression.get("entrantNumber"))
+            for progression in self.progressionsInLabels
+            if isinstance(progression, dict)
+            and progression.get("entrantNumber") is not None
+            and int(progression.get("destBracketSide") or 0) == 2
+        })
+        loserEntrantPositions = {
+            entrantNumber: index
+            for index, entrantNumber in enumerate(loserEntrantNumbers)
+        }
+
+        for progression in self.progressionsInLabels:
+            if not isinstance(progression, dict):
+                continue
+            name = progression.get("label") or progression.get(
+                "placeholderName") or progression.get("name")
+            entrantNumber = progression.get("entrantNumber")
+            if entrantNumber is None or not name:
+                continue
+
+            isLosersSide = int(progression.get("destBracketSide") or 0) == 2
+            if progression.get("destBracketSide") is None:
+                isLosersSide = "loser" in str(name).casefold()
+            targetRounds = visibleLoserRounds if isLosersSide else visibleWinnerRounds
+            targetSet = None
+            if isLosersSide and targetRounds:
+                targetRound = targetRounds[0]
+                targetRoundSets = self.bracket.rounds[str(targetRound)]
+                loserPosition = loserEntrantPositions.get(int(entrantNumber))
+                targetSetIndex = (
+                    loserPosition * len(targetRoundSets) // len(loserEntrantNumbers)
+                    if loserPosition is not None and loserEntrantNumbers
+                    else None
+                )
+                if targetSetIndex is not None and targetSetIndex < len(targetRoundSets):
+                    targetSet = targetRoundSets[targetSetIndex]
+            else:
+                for roundNum in targetRounds:
+                    targetSet = next((
+                        bracketSet for bracketSet in self.bracket.rounds[str(roundNum)]
+                        if str(entrantNumber) in {str(playerId) for playerId in bracketSet.playerIds}
+                    ), None)
+                    if targetSet:
+                        break
+
+                if targetSet is None:
+                    initialRound = self.bracket.rounds.get("1", [])
+                    initialSetIndex = next((
+                        index for index, bracketSet in enumerate(initialRound)
+                        if str(entrantNumber) in {str(playerId) for playerId in bracketSet.playerIds}
+                    ), None)
+                    if initialSetIndex is not None and targetRounds:
+                        targetRound = targetRounds[0]
+                        targetSetIndex = initialSetIndex // (2 ** (targetRound - 1))
+                        targetRoundSets = self.bracket.rounds[str(targetRound)]
+                        if targetSetIndex < len(targetRoundSets):
+                            targetSet = targetRoundSets[targetSetIndex]
+                    elif initialSetIndex is not None:
+                        targetSet = initialRound[initialSetIndex]
+
+            if targetSet:
+                targetSet.progressionsInNames.append(str(name))
+
+        def progressionGroupKey(progression):
+            return progression.get("linkId") or (
+                progression.get("phaseId"),
+                progression.get("originLosses"),
+                progression.get("originPlacement"),
+                progression.get("name"),
+            )
+
+        outputCounts = {}
+        for progression in self.progressionsOutLabels:
+            if isinstance(progression, dict):
+                key = progressionGroupKey(progression)
+                outputCounts[key] = outputCounts.get(key, 0) + 1
+
+        outputIndexes = {}
+        for progression in self.progressionsOutLabels:
+            if not isinstance(progression, dict):
+                continue
+            name = (
+                progression.get("label")
+                or progression.get("name")
+                or progression.get("phaseName")
+            )
+            if not name:
+                continue
+
+            isLosersSide = int(progression.get("originLosses", 0) or 0) > 0
+            targetRounds = visibleLoserRounds if isLosersSide else visibleWinnerRounds
+            if not targetRounds:
+                continue
+
+            targetRound = targetRounds[-1]
+
+            targetSets = self.bracket.rounds[str(targetRound)]
+            progressionKey = progressionGroupKey(progression)
+            targetSetIndex = outputIndexes.get(progressionKey, 0)
+            outputIndexes[progressionKey] = targetSetIndex + 1
+            groupSize = outputCounts.get(progressionKey, 1)
+            if targetSets:
+                targetSetIndex = min(
+                    targetSetIndex * len(targetSets) // groupSize,
+                    len(targetSets) - 1,
+                )
+                targetSet = targetSets[targetSetIndex]
+            else:
+                targetSet = None
+            if targetSet:
+                targetSet.progressionsOutNames.append(str(name))
 
     def SetDefaultsFromAssets(self):
         if StateManager.Get(f'game.defaults'):
