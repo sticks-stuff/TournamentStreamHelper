@@ -263,9 +263,12 @@ class TSHBracketWidget(QDockWidget):
             TSHTournamentDataProvider.instance.GetTournamentPhaseGroup(
                 self.phaseGroupSelection.currentData().get("id"))
 
-    def RebuildBracket(self, playerNumber, seedMap=None, customSeeding=False):
+    def RebuildBracket(self, playerNumber, seedMap=None, customSeeding=False, phaseGroupSets=None):
         self.bracket = Bracket(playerNumber, self.progressionsIn.value(
         ), seedMap, self.winnersOnly.isChecked(), progressionsOut=self.progressionsOut.value())
+
+        if phaseGroupSets is not None:
+            self.bracket.ImportPhaseGroupSets(phaseGroupSets)
 
         self.bracketView.SetBracket(
             self.bracket,
@@ -275,7 +278,7 @@ class TSHBracketWidget(QDockWidget):
             customSeeding=customSeeding
         )
 
-        if self.progressionsIn.value() > 0:
+        if phaseGroupSets is None and self.progressionsIn.value() > 0:
             for _set in self.bracket.rounds["1"]:
                 _set.score[0] = -1
                 _set.score[1] = -1
@@ -319,6 +322,11 @@ class TSHBracketWidget(QDockWidget):
 
             entrants = phaseGroupData.get("entrants") or []
             sets = phaseGroupData.get("sets") or {}
+            hasSetTopology = any(
+                setData.get("id") is not None and setData.get("slots")
+                for roundSets in sets.values()
+                for setData in roundSets
+            )
 
             # A partial fetch (e.g. one of the paginated StartGG requests
             # coming back empty/erroring) leaves entrants and sets out of
@@ -370,25 +378,25 @@ class TSHBracketWidget(QDockWidget):
             self.RebuildBracket(
                 len(entrants),
                 phaseGroupData.get("seedMap"),
-                phaseGroupData.get("customSeeding", False)
+                phaseGroupData.get("customSeeding", False),
+                sets if hasSetTopology else None
             )
 
-            for r, round in (phaseGroupData.get("sets") or {}).items():
-                for s, _set in enumerate(round):
-                    try:
-                        score = _set.get("score")
-                        if score[0] == None:
-                            score[0] = 0
-                        if score[1] == None:
-                            score[1] = 0
+            if not hasSetTopology:
+                for roundKey, roundSets in sets.items():
+                    for setIndex, setData in enumerate(roundSets):
+                        try:
+                            score = setData.get("score")
+                            if score[0] is None:
+                                score[0] = 0
+                            if score[1] is None:
+                                score[1] = 0
 
-                        roundIndex = str(r)
-
-                        self.bracket.rounds[roundIndex][s].score = score
-                        self.bracket.rounds[roundIndex][s].finished = _set.get(
-                            "finished")
-                    except Exception as e:
-                        logger.error(traceback.format_exc())
+                            bracketRound = self.bracket.rounds[str(roundKey)]
+                            bracketRound[setIndex].score = score
+                            bracketRound[setIndex].finished = setData.get("finished")
+                        except Exception:
+                            logger.error(traceback.format_exc())
 
             QGuiApplication.processEvents()
             self.bracket.UpdateBracket()

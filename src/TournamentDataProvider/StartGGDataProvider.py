@@ -317,6 +317,12 @@ class StartGGDataProvider(TournamentDataProvider):
 
             seeds.sort(key=lambda s: s.get("seedNum"))
 
+            entrantPlayerIds = {
+                str(deep_get(seed, "entrant.id")): index
+                for index, seed in enumerate(seeds, start=1)
+                if deep_get(seed, "entrant.id") is not None
+            }
+
             if seedMap:
                 seedMap = [s if s != "bye" else -1 for s in seedMap]
                 finalData["seedMap"] = seedMap
@@ -364,8 +370,18 @@ class StartGGDataProvider(TournamentDataProvider):
                     finalSets[str(round)] = []
 
                 finalSets[str(round)].append({
+                    "id": s.get("id"),
                     "score": [s.get("entrant1Score"), s.get("entrant2Score")],
-                    "finished": s.get("state", 0) == 3
+                    "finished": s.get("state", 0) == 3,
+                    "slots": [
+                        {
+                            "playerId": entrantPlayerIds.get(str(deep_get(slot, "entrant.id"))),
+                            "prereqType": slot.get("prereqType"),
+                            "prereqId": slot.get("prereqId"),
+                            "prereqPlacement": slot.get("prereqPlacement"),
+                        }
+                        for slot in (s.get("slots") or [])
+                    ]
                 })
 
             finalData["sets"] = finalSets
@@ -392,25 +408,6 @@ class StartGGDataProvider(TournamentDataProvider):
 
             finalData["customSeeding"] = deep_get(
                 oldData, "entities.groups.hasCustomWinnerByes")
-
-            if len(finalData["progressionsIn"]) > 0 and not finalData["winnersOnlyProgressions"]:
-                originalKeys = list(finalData["sets"].keys())
-                originalKeys.reverse()
-
-                # If we have a non-power2 number of progressions in, we shift 2 rounds
-                shift = 1 if is_power_of_two(
-                    len(finalData["progressionsIn"])) else 2
-
-                if deep_get(oldData, "entities.groups.hasCustomWinnerByes"):
-                    shift = 1
-
-                for roundKey in originalKeys:
-                    round = int(roundKey)
-
-                    # If we have progressions in, shift winners scores to the right
-                    if round > 0:
-                        finalData["sets"][str(
-                            round+shift)] = finalData["sets"].pop(roundKey)
 
             finalData["progressionsOut"] = progressionsOut
 

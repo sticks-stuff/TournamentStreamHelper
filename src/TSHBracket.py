@@ -61,6 +61,8 @@ class Bracket():
 
         self.progressionsIn = progressionsIn
         self.progressionsOut = progressionsOut
+        self.hasImportedTopology = False
+        self.importedUpdateOrder = []
 
         if seedMap:
             if len(seedMap) < self.playerNumber:
@@ -196,94 +198,196 @@ class Bracket():
         lastLosers = min([int(r) for r in self.rounds.keys()])
         gfsRound = max([int(r) for r in self.rounds.keys()]) - 1
         self.rounds[str(lastLosers)][0].winNext = self.rounds[str(gfsRound)][0]
+        self.rounds[str(lastLosers)][0].winNextSlot = 1
 
         # Connect grand finals to reset
         gfsResetRound = max([int(r) for r in self.rounds.keys()])
         gfsRound = gfsResetRound - 1
         self.rounds[str(gfsRound)][0].winNext = self.rounds[str(
             gfsResetRound)][0]
+        self.rounds[str(gfsRound)][0].winNextSlot = 0
         self.rounds[str(gfsRound)][0].loseNext = self.rounds[str(
             gfsResetRound)][0]
+        self.rounds[str(gfsRound)][0].loseNextSlot = 1
 
     def IsBye(self, playerId):
         if playerId == -1 or playerId > self.originalPlayerNumber:
             return True
         return False
 
-    def UpdateBracket(self):
-        for roundKey, round in sorted(self.rounds.items(), key=lambda x: (int(x[0]) < 0, abs(int(x[0])))):
-            for j, _set in enumerate(round):
-                targetIdW = j % 2
-                targetIdL = 0
-                if int(roundKey) < 0 and abs(int(roundKey)) % 2 == 1:
-                    targetIdW = 1
+    def GetLeadingLosersByeRounds(self):
+        if not self.hasImportedTopology:
+            return 0
 
-                lastLosers = min([int(r) for r in self.rounds.keys()])
-                if roundKey == str(lastLosers):
-                    targetIdW = 1
+        losersRounds = sorted(
+            abs(int(roundKey))
+            for roundKey in self.rounds
+            if int(roundKey) < 0
+        )
+        skippedRounds = 0
 
-                gfsRound = max([int(r) for r in self.rounds.keys()]) - 1
-                if roundKey == str(gfsRound):
-                    targetIdW = 0
-                    targetIdL = 1
+        for expectedRound, roundNumber in enumerate(losersRounds, start=1):
+            if roundNumber != expectedRound:
+                break
 
-                # When we have progressions in, force first (hidden) sets to double DQs
-                # If we have a non-power of 2 number of progressions, we do it for 2 rounds
-                if self.progressionsIn > 0 and not self.winnersOnlyProgressions:
-                    if int(roundKey) == 1:
-                        _set.score = [-1, -1]
-                        _set.finished = True
+            roundSets = self.rounds[str(-roundNumber)]
+            if not roundSets or not all(
+                any(self.IsBye(playerId) for playerId in bracketSet.playerIds)
+                for bracketSet in roundSets
+            ):
+                break
 
-                    if int(roundKey) == 2 and not is_power_of_two(self.progressionsIn) and not self.customSeeding:
-                        _set.score = [-1, -1]
-                        _set.finished = True
+            skippedRounds += 1
 
-                if _set.winNext:
-                    # Both slots are bye OR slot 2 is bye, auto win for p1
-                    if (self.IsBye(_set.playerIds[0]) and self.IsBye(_set.playerIds[1])) or \
-                            (not self.IsBye(_set.playerIds[0]) and self.IsBye(_set.playerIds[1])):
-                        won = 0
-                        lost = 1
-                        _set.winNext.playerIds[targetIdW] = _set.playerIds[won]
-                        if _set.loseNext:
-                            _set.loseNext.playerIds[targetIdL] = _set.playerIds[lost]
-                    # Slot 1 is bye, auto win
-                    elif self.IsBye(_set.playerIds[0]) and not self.IsBye(_set.playerIds[1]):
-                        won = 1
-                        lost = 0
-                        _set.winNext.playerIds[targetIdW] = _set.playerIds[won]
-                        if _set.loseNext:
-                            _set.loseNext.playerIds[targetIdL] = _set.playerIds[lost]
-                    # -1,-1 draw; advance higher seed
-                    elif _set.score[0] == -1 and _set.score[1] == -1:
-                        # Advance higher seed
-                        won = 0 if _set.playerIds[0] < _set.playerIds[1] else 1
-                        lost = 0 if won == 1 else 1
-                        _set.winNext.playerIds[targetIdW] = _set.playerIds[won]
-                        if _set.loseNext:
-                            _set.loseNext.playerIds[targetIdL] = _set.playerIds[lost]
-                    # Set not finished, pass pending state
-                    elif not _set.finished:
-                        _set.winNext.playerIds[targetIdW] = -2
-                        if _set.loseNext:
-                            _set.loseNext.playerIds[targetIdL] = -2
-                    # Real match results
+        return skippedRounds
+
+    def ImportPhaseGroupSets(self, phaseGroupSets):
+        importedRounds = {}
+        setsById = {}
+        prerequisites = []
+
+        for roundKey in sorted(phaseGroupSets, key=lambda key: (int(key) < 0, abs(int(key)))):
+            roundNumber = int(roundKey)
+            importedRounds[str(roundNumber)] = []
+
+            for setData in phaseGroupSets[roundKey]:
+                bracketSet = BracketSet(self, [roundNumber, len(importedRounds[str(roundNumber)])])
+                bracketSet.id = str(setData.get("id"))
+                bracketSet.score = [
+                    0 if score is None else score
+                    for score in setData.get("score", [0, 0])
+                ]
+                bracketSet.finished = setData.get("finished", False)
+
+                slots = setData.get("slots") or []
+                for slotIndex in range(2):
+                    slot = slots[slotIndex] if slotIndex < len(slots) else {}
+                    playerId = slot.get("playerId")
+                    if playerId is not None:
+                        bracketSet.playerIds[slotIndex] = playerId
+                    elif slot.get("prereqType") in ("bye", "seed"):
+                        bracketSet.playerIds[slotIndex] = BracketSet.BYE
                     else:
-                        # P1 wins
-                        if _set.score[0] > _set.score[1]:
-                            _set.winNext.playerIds[targetIdW] = _set.playerIds[0]
-                            if _set.loseNext:
-                                _set.loseNext.playerIds[targetIdL] = _set.playerIds[1]
-                        # P2 wins
-                        elif _set.score[0] < _set.score[1]:
-                            _set.winNext.playerIds[targetIdW] = _set.playerIds[1]
-                            if _set.loseNext:
-                                _set.loseNext.playerIds[targetIdL] = _set.playerIds[0]
-                        # Draw
-                        else:
-                            _set.winNext.playerIds[targetIdW] = -2
-                            if _set.loseNext:
-                                _set.loseNext.playerIds[targetIdL] = -2
+                        bracketSet.playerIds[slotIndex] = BracketSet.PENDING
+
+                    if slot.get("prereqType") == "set" and slot.get("prereqId") is not None:
+                        prerequisites.append((bracketSet, slotIndex, slot))
+
+                importedRounds[str(roundNumber)].append(bracketSet)
+                if bracketSet.id not in ("None", ""):
+                    setsById[bracketSet.id] = bracketSet
+
+        for target, targetSlot, slot in prerequisites:
+            source = setsById.get(str(slot.get("prereqId")))
+            if source is None:
+                continue
+
+            try:
+                placement = int(slot.get("prereqPlacement"))
+            except (TypeError, ValueError):
+                continue
+
+            if placement == 1:
+                source.winNext = target
+                source.winNextSlot = targetSlot
+            elif placement == 2:
+                source.loseNext = target
+                source.loseNextSlot = targetSlot
+
+        allSets = [bracketSet for roundSets in importedRounds.values() for bracketSet in roundSets]
+        incomingCounts = {bracketSet: 0 for bracketSet in allSets}
+        for bracketSet in allSets:
+            for target in (bracketSet.winNext, bracketSet.loseNext):
+                if target is not None:
+                    incomingCounts[target] += 1
+
+        def sortKey(bracketSet):
+            return (
+                bracketSet.pos[0] < 0,
+                abs(bracketSet.pos[0]),
+                bracketSet.pos[1],
+            )
+
+        ready = sorted(
+            (bracketSet for bracketSet, count in incomingCounts.items() if count == 0),
+            key=sortKey,
+        )
+        self.importedUpdateOrder = []
+        while ready:
+            bracketSet = ready.pop(0)
+            self.importedUpdateOrder.append(bracketSet)
+            for target in (bracketSet.winNext, bracketSet.loseNext):
+                if target is None:
+                    continue
+                incomingCounts[target] -= 1
+                if incomingCounts[target] == 0:
+                    ready.append(target)
+                    ready.sort(key=sortKey)
+
+        if len(self.importedUpdateOrder) != len(allSets):
+            ordered = set(self.importedUpdateOrder)
+            self.importedUpdateOrder.extend(sorted(
+                (bracketSet for bracketSet in allSets if bracketSet not in ordered),
+                key=sortKey,
+            ))
+
+        self.rounds = importedRounds
+        self.hasImportedTopology = True
+
+    def UpdateBracket(self):
+        if self.hasImportedTopology:
+            orderedSets = [(str(bracketSet.pos[0]), bracketSet) for bracketSet in self.importedUpdateOrder]
+        else:
+            orderedSets = [
+                (roundKey, bracketSet)
+                for roundKey, roundSets in sorted(self.rounds.items(), key=lambda item: (int(item[0]) < 0, abs(int(item[0]))))
+                for bracketSet in roundSets
+            ]
+
+        for roundKey, _set in orderedSets:
+            # When we have progressions in, force first (hidden) sets to double DQs
+            # If we have a non-power of 2 number of progressions in, we do it for 2 rounds
+            if not self.hasImportedTopology and self.progressionsIn > 0 and not self.winnersOnlyProgressions:
+                if int(roundKey) == 1:
+                    _set.score = [-1, -1]
+                    _set.finished = True
+
+                if int(roundKey) == 2 and not is_power_of_two(self.progressionsIn) and not self.customSeeding:
+                    _set.score = [-1, -1]
+                    _set.finished = True
+
+            if not (_set.winNext or _set.loseNext):
+                continue
+
+            if (self.IsBye(_set.playerIds[0]) and self.IsBye(_set.playerIds[1])) or \
+                    (not self.IsBye(_set.playerIds[0]) and self.IsBye(_set.playerIds[1])):
+                won, lost = 0, 1
+            elif self.IsBye(_set.playerIds[0]) and not self.IsBye(_set.playerIds[1]):
+                won, lost = 1, 0
+            elif _set.score[0] == -1 and _set.score[1] == -1:
+                won = 0 if _set.playerIds[0] < _set.playerIds[1] else 1
+                lost = 0 if won == 1 else 1
+            elif not _set.finished:
+                if _set.winNext:
+                    _set.winNext.playerIds[_set.winNextSlot] = BracketSet.PENDING
+                if _set.loseNext:
+                    _set.loseNext.playerIds[_set.loseNextSlot] = BracketSet.PENDING
+                continue
+            elif _set.score[0] > _set.score[1]:
+                won, lost = 0, 1
+            elif _set.score[0] < _set.score[1]:
+                won, lost = 1, 0
+            else:
+                if _set.winNext:
+                    _set.winNext.playerIds[_set.winNextSlot] = BracketSet.PENDING
+                if _set.loseNext:
+                    _set.loseNext.playerIds[_set.loseNextSlot] = BracketSet.PENDING
+                continue
+
+            if _set.winNext:
+                _set.winNext.playerIds[_set.winNextSlot] = _set.playerIds[won]
+            if _set.loseNext:
+                _set.loseNext.playerIds[_set.loseNextSlot] = _set.playerIds[lost]
 
         # Clear scores when no players in set
         # for k, round in sorted(self.rounds.items(), key=lambda x: (int(x[0]) < 0, abs(int(x[0])))):
