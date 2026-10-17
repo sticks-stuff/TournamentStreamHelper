@@ -48,6 +48,7 @@ class TSHBracketWidget(QDockWidget):
         self.pendingPhaseGroupData = None
         self.progressionsInLabels = []
         self.progressionsOutLabels = []
+        self.phaseGroupSets = {}
 
         TSHTournamentDataProvider.instance.signals.tournament_phases_updated.connect(
             self.UpdatePhases)
@@ -349,6 +350,7 @@ class TSHBracketWidget(QDockWidget):
 
             self.progressionsInLabels = phaseGroupData.get("progressionsIn") or []
             self.progressionsOutLabels = phaseGroupData.get("progressionsOut") or []
+            self.phaseGroupSets = phaseGroupData.get("sets") or {}
 
             if phaseGroupData.get("progressionsIn", {}) != None:
                 self.progressionsIn.setValue(
@@ -454,6 +456,48 @@ class TSHBracketWidget(QDockWidget):
             for index, entrantNumber in enumerate(loserEntrantNumbers)
         }
 
+        setsById = {}
+        seedSetById = {}
+        for roundKey, roundSets in self.phaseGroupSets.items():
+            for setIndex, setData in enumerate(roundSets):
+                setId = str(setData.get("id"))
+                setsById[setId] = (int(roundKey), setIndex, setData)
+                for slot in setData.get("slots", []):
+                    if slot.get("prereqType") == "seed":
+                        seedSetById[str(slot.get("prereqId"))] = setId
+
+        def findVisibleSetForSeed(seedId, targetRounds, isLosersSide):
+            currentSetId = seedSetById.get(str(seedId))
+            visited = set()
+            while currentSetId and currentSetId not in visited:
+                visited.add(currentSetId)
+                location = setsById.get(currentSetId)
+                if location and location[0] in targetRounds:
+                    return self.bracket.rounds[str(location[0])][location[1]]
+
+                placement = 1
+                if isLosersSide and location and location[0] > 0:
+                    placement = 2
+
+                nextSets = []
+                for roundSets in self.phaseGroupSets.values():
+                    for setData in roundSets:
+                        if any(
+                            slot.get("prereqType") == "set"
+                            and str(slot.get("prereqId")) == currentSetId
+                            and int(slot.get("prereqPlacement") or 0)
+                            == placement
+                            for slot in setData.get("slots", [])
+                        ):
+                            nextSets.append(setData)
+                if not nextSets:
+                    return None
+
+                nextSet = nextSets[0]
+                nextSetId = str(nextSet.get("id"))
+                currentSetId = nextSetId
+            return None
+
         for progression in self.progressionsInLabels:
             if not isinstance(progression, dict):
                 continue
@@ -468,18 +512,23 @@ class TSHBracketWidget(QDockWidget):
                 isLosersSide = "loser" in str(name).casefold()
             targetRounds = visibleLoserRounds if isLosersSide else visibleWinnerRounds
             targetSet = None
-            if isLosersSide and targetRounds:
-                targetRound = targetRounds[0]
-                targetRoundSets = self.bracket.rounds[str(targetRound)]
-                loserPosition = loserEntrantPositions.get(int(entrantNumber))
-                targetSetIndex = (
-                    loserPosition * len(targetRoundSets) // len(loserEntrantNumbers)
-                    if loserPosition is not None and loserEntrantNumbers
-                    else None
-                )
-                if targetSetIndex is not None and targetSetIndex < len(targetRoundSets):
-                    targetSet = targetRoundSets[targetSetIndex]
-            else:
+            if isLosersSide and progression.get("seedId") is not None:
+                targetSet = findVisibleSetForSeed(
+                    progression.get("seedId"), targetRounds, isLosersSide)
+
+            if targetSet is None and isLosersSide and targetRounds:
+                if targetSet is None:
+                    targetRound = targetRounds[0]
+                    targetRoundSets = self.bracket.rounds[str(targetRound)]
+                    loserPosition = loserEntrantPositions.get(int(entrantNumber))
+                    targetSetIndex = (
+                        loserPosition * len(targetRoundSets) // len(loserEntrantNumbers)
+                        if loserPosition is not None and loserEntrantNumbers
+                        else None
+                    )
+                    if targetSetIndex is not None and targetSetIndex < len(targetRoundSets):
+                        targetSet = targetRoundSets[targetSetIndex]
+            elif targetSet is None:
                 for roundNum in targetRounds:
                     targetSet = next((
                         bracketSet for bracketSet in self.bracket.rounds[str(roundNum)]

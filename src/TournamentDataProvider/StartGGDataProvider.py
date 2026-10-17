@@ -586,6 +586,7 @@ class StartGGDataProvider(TournamentDataProvider):
                     matchingLink = sourceLinks[0]
 
                 finalData["progressionsIn"].append({
+                    "seedId": s.get("id"),
                     "originPhaseId": originPhaseId,
                     "originPhaseGroupId": deep_get(
                         progressionSource, "originPhaseGroup.id"),
