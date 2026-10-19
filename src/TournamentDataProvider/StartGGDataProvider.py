@@ -407,7 +407,7 @@ class StartGGDataProvider(TournamentDataProvider):
                 if side is not None:
                     sides.setdefault(str(originPhaseId), []).append({
                         "side": side,
-                        "name": link.get("name", ""),
+                        "name": link.get("name") or "",
                         "originLosses": link.get("originLosses"),
                     })
 
@@ -593,7 +593,7 @@ class StartGGDataProvider(TournamentDataProvider):
                 sideHint = "losers" if "loser" in placeholderName.casefold() else "winners"
                 matchingLink = next((
                     link for link in sourceLinks
-                    if sideHint in link.get("name", "").casefold()
+                    if sideHint in (link.get("name") or "").casefold()
                 ), None)
                 if matchingLink is None and sourceLinks:
                     matchingLink = sourceLinks[0]
