@@ -556,7 +556,12 @@ class TSHBracketWidget(QDockWidget):
                 targetSet.progressionsInNames.append(str(name))
 
         def progressionGroupKey(progression):
-            return progression.get("linkId") or (
+            if progression.get("linkId"):
+                return (
+                    progression.get("linkId"),
+                    progression.get("originPlacement"),
+                )
+            return (
                 progression.get("phaseId"),
                 progression.get("originLosses"),
                 progression.get("originPlacement"),
@@ -569,7 +574,7 @@ class TSHBracketWidget(QDockWidget):
                 key = progressionGroupKey(progression)
                 outputCounts[key] = outputCounts.get(key, 0) + 1
 
-        outputIndexes = {}
+        outputGroups = {}
         for progression in self.progressionsOutLabels:
             if not isinstance(progression, dict):
                 continue
@@ -586,23 +591,64 @@ class TSHBracketWidget(QDockWidget):
             if not targetRounds:
                 continue
 
-            targetRound = targetRounds[-1]
-
-            targetSets = self.bracket.rounds[str(targetRound)]
-            progressionKey = progressionGroupKey(progression)
-            targetSetIndex = outputIndexes.get(progressionKey, 0)
-            outputIndexes[progressionKey] = targetSetIndex + 1
-            groupSize = outputCounts.get(progressionKey, 1)
-            if targetSets:
-                targetSetIndex = min(
-                    targetSetIndex * len(targetSets) // groupSize,
-                    len(targetSets) - 1,
+            targetRoundIndex = len(targetRounds) - 1
+            originPlacement = progression.get("originPlacement")
+            if isLosersSide and originPlacement:
+                losses = int(progression.get("originLosses", 0) or 0)
+                if losses >= 2:
+                    placementBlockSize = max(
+                        1, self.bracket.originalPlayerNumber // 4)
+                    roundOffset = max(
+                        0, (int(originPlacement) - 1) // placementBlockSize)
+                else:
+                    roundOffset = 0
+                targetRoundIndex = max(
+                    0, min(targetRoundIndex - roundOffset, len(targetRounds) - 1)
                 )
-                targetSet = targetSets[targetSetIndex]
-            else:
-                targetSet = None
-            if targetSet:
-                targetSet.progressionsOutNames.append(str(name))
+            targetRound = targetRounds[targetRoundIndex]
+            progressionKey = progressionGroupKey(progression)
+            outputGroups.setdefault((targetRound, progressionKey), []).append(progression)
+
+        groupsByRound = {}
+        for (targetRound, progressionKey), progressions in outputGroups.items():
+            groupsByRound.setdefault(targetRound, []).append(
+                (progressionKey, progressions)
+            )
+
+        for targetRound, groups in groupsByRound.items():
+            targetSets = self.bracket.rounds[str(targetRound)]
+            groups.sort(key=lambda group: (
+                int(group[1][0].get("originPlacement", 0) or 0),
+                str(group[0]),
+            ))
+            totalProgressions = sum(len(progressions) for _, progressions in groups)
+            setCursor = 0
+
+            for _, progressions in groups:
+                progressions.sort(key=lambda progression: (
+                    int(progression.get("originOrder", 0) or 0),
+                    int(progression.get("id", 0) or 0),
+                ))
+                groupSize = len(progressions)
+                for progressionIndex, progression in enumerate(progressions):
+                    if not targetSets:
+                        break
+                    if totalProgressions <= len(targetSets):
+                        targetSetIndex = setCursor + progressionIndex
+                    elif groupSize >= len(targetSets) and progression.get("originOrder"):
+                        targetSetIndex = int(progression["originOrder"]) - 1
+                    else:
+                        targetSetIndex = progressionIndex * len(targetSets) // groupSize
+                    targetSetIndex = min(targetSetIndex, len(targetSets) - 1)
+                    name = (
+                        progression.get("label")
+                        or progression.get("name")
+                        or progression.get("phaseName")
+                    )
+                    if name and str(name) not in targetSets[targetSetIndex].progressionsOutNames:
+                        targetSets[targetSetIndex].progressionsOutNames.append(str(name))
+                if totalProgressions <= len(targetSets):
+                    setCursor += groupSize
 
     def SetDefaultsFromAssets(self):
         if StateManager.Get(f'game.defaults'):

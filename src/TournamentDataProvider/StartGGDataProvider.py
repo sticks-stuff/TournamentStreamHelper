@@ -464,11 +464,24 @@ class StartGGDataProvider(TournamentDataProvider):
                             progression for progression in progressionsOut
                             if str(progression.get("originPlacement")) == str(originPlacement)
                         ), None)
+                        if matchingLink is None:
+                            candidates = [
+                                progression for progression in progressionsOut
+                                if int(progression.get("originPlacement", 0) or 0)
+                                <= int(originPlacement or 0)
+                            ]
+                            matchingLink = max(
+                                candidates,
+                                key=lambda progression: int(
+                                    progression.get("originPlacement", 0) or 0),
+                                default=None,
+                            )
 
                     output = dict(matchingLink or {})
                     output.update({
                         "id": graphQLProgression.get("id"),
                         "linkId": (matchingLink or {}).get("id"),
+                        "originOrder": graphQLProgression.get("originOrder"),
                         "placeholderName": placeholderName,
                         "originPlacement": originPlacement,
                     })

@@ -54,6 +54,7 @@ query TournamentPhaseGroupSeedsQuery($id: ID!, $page: Int!, $perPage: Int!) {
 		}
 		progressionsOut {
 			id
+			originOrder
 			originPlacement
 			placeholderName
 		}
