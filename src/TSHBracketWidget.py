@@ -556,6 +556,17 @@ class TSHBracketWidget(QDockWidget):
                 targetSet.progressionsInNames.append(str(name))
 
         def progressionGroupKey(progression):
+            if int(progression.get("originLosses", 0) or 0) >= 2:
+                return (
+                    "losers",
+                    progression.get("linkId") or (
+                        progression.get("phaseId"),
+                        progression.get("name"),
+                    ),
+                    progression.get("originLosses"),
+                    progression.get("originPlacement"),
+                    progression.get("name"),
+                )
             if progression.get("linkId"):
                 return (
                     progression.get("linkId"),
@@ -568,16 +579,35 @@ class TSHBracketWidget(QDockWidget):
                 progression.get("name"),
             )
 
-        outputCounts = {}
+        progressionsByKey = {}
         for progression in self.progressionsOutLabels:
             if isinstance(progression, dict):
                 key = progressionGroupKey(progression)
-                outputCounts[key] = outputCounts.get(key, 0) + 1
+                progressionsByKey.setdefault(key, []).append(progression)
+
+        loserProgressionGroups = sorted(
+            (
+                (progressionKey, progressions)
+                for progressionKey, progressions in progressionsByKey.items()
+                if progressionKey[0] == "losers"
+            ),
+            key=lambda group: min(
+                int(item.get("originPlacement", 0) or 0)
+                for item in group[1]
+            ),
+        )
+        loserProgressionRounds = {}
+        usedLoserRounds = set()
+        for progressionKey, progressions in loserProgressionGroups:
+            targetRound = self.bracket.GetLosersRoundForProgressionCount(
+                len(progressions), visibleLoserRounds, usedLoserRounds)
+            if targetRound is not None:
+                loserProgressionRounds[progressionKey] = targetRound
+                usedLoserRounds.add(targetRound)
 
         outputGroups = {}
-        for progression in self.progressionsOutLabels:
-            if not isinstance(progression, dict):
-                continue
+        for progressionKey, progressions in progressionsByKey.items():
+            progression = progressions[0]
             name = (
                 progression.get("label")
                 or progression.get("name")
@@ -592,22 +622,13 @@ class TSHBracketWidget(QDockWidget):
                 continue
 
             targetRoundIndex = len(targetRounds) - 1
-            originPlacement = progression.get("originPlacement")
-            if isLosersSide and originPlacement:
-                losses = int(progression.get("originLosses", 0) or 0)
-                if losses >= 2:
-                    placementBlockSize = max(
-                        1, self.bracket.originalPlayerNumber // 4)
-                    roundOffset = max(
-                        0, (int(originPlacement) - 1) // placementBlockSize)
-                else:
-                    roundOffset = 0
-                targetRoundIndex = max(
-                    0, min(targetRoundIndex - roundOffset, len(targetRounds) - 1)
-                )
-            targetRound = targetRounds[targetRoundIndex]
-            progressionKey = progressionGroupKey(progression)
-            outputGroups.setdefault((targetRound, progressionKey), []).append(progression)
+            if isLosersSide and int(progression.get("originLosses", 0) or 0) >= 2:
+                targetRound = loserProgressionRounds.get(progressionKey)
+                if targetRound is None:
+                    targetRound = targetRounds[0]
+            else:
+                targetRound = targetRounds[targetRoundIndex]
+            outputGroups[(targetRound, progressionKey)] = progressions
 
         groupsByRound = {}
         for (targetRound, progressionKey), progressions in outputGroups.items():
@@ -621,11 +642,32 @@ class TSHBracketWidget(QDockWidget):
                 int(group[1][0].get("originPlacement", 0) or 0),
                 str(group[0]),
             ))
-            totalProgressions = sum(len(progressions) for _, progressions in groups)
+            totalProgressions = sum(
+                len(progressions)
+                for progressionKey, progressions in groups
+                if progressionKey[0] != "losers"
+            )
             setCursor = 0
 
-            for _, progressions in groups:
+            for progressionKey, progressions in groups:
+                if progressionKey[0] == "losers":
+                    progressionNames = dict.fromkeys(
+                        str(
+                            progression.get("label")
+                            or progression.get("name")
+                            or progression.get("phaseName")
+                        )
+                        for progression in progressions
+                        if progression.get("label")
+                        or progression.get("name")
+                        or progression.get("phaseName")
+                    )
+                    for name in progressionNames:
+                        self.bracket.AddProgressionOutNameToRound(targetRound, name)
+                    continue
+
                 progressions.sort(key=lambda progression: (
+                    int(progression.get("originPlacement", 0) or 0),
                     int(progression.get("originOrder", 0) or 0),
                     int(progression.get("id", 0) or 0),
                 ))

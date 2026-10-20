@@ -245,6 +245,29 @@ class Bracket():
 
         return skippedRounds
 
+    def GetLosersRoundForProgressionCount(self, progressionCount, targetRounds, usedRounds):
+        if not targetRounds:
+            return None
+
+        availableRounds = [
+            roundNumber for roundNumber in reversed(targetRounds)
+            if roundNumber not in usedRounds
+        ]
+        if not availableRounds:
+            return None
+
+        return min(
+            availableRounds,
+            key=lambda roundNumber: abs(
+                len(self.rounds[str(roundNumber)]) - progressionCount
+            ),
+        )
+
+    def AddProgressionOutNameToRound(self, roundNumber, name):
+        for bracketSet in self.rounds.get(str(roundNumber), []):
+            if name not in bracketSet.progressionsOutNames:
+                bracketSet.progressionsOutNames.append(name)
+
     def ImportPhaseGroupSets(self, phaseGroupSets):
         importedRounds = {}
         setsById = {}
