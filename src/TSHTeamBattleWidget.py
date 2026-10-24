@@ -248,6 +248,13 @@ class TSHTeamBattleWidget(QDockWidget):
         self.team1score.valueChanged.emit(0)
         self.widgetArea.layout().addWidget(self.team1column)
 
+        self.btSwapTeams = QPushButton(
+            QApplication.translate("app", "Swap teams"))
+        self.btSwapTeams.setIcon(QIcon("assets/icons/swap.svg"))
+        self.btSwapTeams.clicked.connect(self.SwapTeams)
+        self.widgetArea.layout().addWidget(
+            self.btSwapTeams, 0, Qt.AlignmentFlag.AlignCenter)
+
         self.team2column = uic.loadUi(TSHResolve("src/layout/TSHBattleTeam.ui"))
         self.team2column.setSizePolicy(
             QSizePolicy.Preferred, QSizePolicy.Preferred)
@@ -420,6 +427,41 @@ class TSHTeamBattleWidget(QDockWidget):
         for pw in self.playerWidgets:
             pw.ResetDynamicSpinner()
             pw.Clear()
+
+    def SwapTeams(self):
+        with StateManager.SaveBlock():
+            for player1, player2 in zip(
+                    self.team1playerWidgets, self.team2playerWidgets):
+                player1.SwapWith(player2)
+
+            team1Name = self.team1column.findChild(
+                QLineEdit, "teamName").text()
+            self.team1column.findChild(QLineEdit, "teamName").setText(
+                self.team2column.findChild(QLineEdit, "teamName").text())
+            self.team2column.findChild(QLineEdit, "teamName").setText(
+                team1Name)
+            self.team1column.findChild(
+                QLineEdit, "teamName").editingFinished.emit()
+            self.team2column.findChild(
+                QLineEdit, "teamName").editingFinished.emit()
+
+            team1Score = self.team1score.value()
+            self.team1score.setValue(self.team2score.value())
+            self.team2score.setValue(team1Score)
+
+            team1Color = self.colorButton1.color()
+            self.colorButton1.setColor(self.colorButton2.color())
+            self.colorButton2.setColor(team1Color)
+
+            team1SponsorsSeparate = self.team1column.findChild(
+                QCheckBox, "separateSponsors").isChecked()
+            self.team1column.findChild(
+                QCheckBox, "separateSponsors").setChecked(
+                    self.team2column.findChild(
+                        QCheckBox, "separateSponsors").isChecked())
+            self.team2column.findChild(
+                QCheckBox, "separateSponsors").setChecked(
+                    team1SponsorsSeparate)
     
     def ToggleSponsorsForTeam1(self):
         for player in self.team1playerWidgets:
