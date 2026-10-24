@@ -737,10 +737,78 @@ class StartGGDataProvider(TournamentDataProvider):
                 }
             )
             # logger.debug(data.get("data", {}).get("set", {}))
-            return self.ParseMatchDataNewApi(data.get("data", {}).get("set", {}))
+            setData = data.get("data", {}).get("set", {})
+            parsedSetData = self.ParseMatchDataNewApi(setData)
+            phaseGroupId = deep_get(setData, "phaseGroup.id")
+            if phaseGroupId:
+                parsedSetData["winnerAdvancesTo"] = self._FetchWinnerAdvancesTo(
+                    phaseGroupId, setId)
+            return parsedSetData
         except Exception as e:
             logger.error(traceback.format_exc())
             return {}
+
+    @staticmethod
+    def _FindWinnerAdvancement(setId, sets):
+        for targetSet in sets:
+            for slot in targetSet.get("slots") or []:
+                if (slot.get("prereqType") != "set"
+                        or str(slot.get("prereqId")) != str(setId)):
+                    continue
+                try:
+                    isWinnerPrerequisite = int(slot.get("prereqPlacement")) == 1
+                except (TypeError, ValueError):
+                    continue
+                if not isWinnerPrerequisite:
+                    continue
+
+                return {
+                    "id": targetSet.get("id"),
+                    "round": targetSet.get("round"),
+                    "identifier": targetSet.get("identifier"),
+                    "name": (
+                        targetSet.get("fullRoundText")
+                        or targetSet.get("identifier")
+                        or str(targetSet.get("id"))
+                    ),
+                }
+        return None
+
+    def _FetchWinnerAdvancesTo(self, phaseGroupId, setId):
+        page = 1
+        totalPages = 1
+
+        while page <= totalPages:
+            data = self.QueryRequests(
+                "https://www.start.gg/api/-/gql",
+                type=requests.post,
+                jsonParams={
+                    "operationName": "TournamentPhaseGroupSetsQuery",
+                    "variables": {
+                        "id": phaseGroupId,
+                        "page": page,
+                        "perPage": 200
+                    },
+                    "query": StartGGDataProvider.TournamentPhaseGroupSetsQuery
+                }
+            )
+
+            if data.get("errors"):
+                logger.error(
+                    "TournamentPhaseGroupSetsQuery errors while resolving "
+                    f"winner progression for set {setId}: {data.get('errors')}")
+
+            targetSets = deep_get(data, "data.phaseGroup.sets.nodes", []) or []
+            advancement = StartGGDataProvider._FindWinnerAdvancement(
+                setId, targetSets)
+            if advancement:
+                return advancement
+
+            totalPages = deep_get(
+                data, "data.phaseGroup.sets.pageInfo.totalPages", 1)
+            page += 1
+
+        return None
 
     def _FetchMatchesPage(self, states, page, cancel_event=None):
         if cancel_event is not None and cancel_event.is_set():

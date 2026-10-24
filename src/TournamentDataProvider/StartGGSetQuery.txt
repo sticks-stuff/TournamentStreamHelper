@@ -82,6 +82,7 @@ query SetQuery($id: ID!) {
 		}
 		round
 		phaseGroup {
+			id
 			phase {
 				name
 				groupCount
