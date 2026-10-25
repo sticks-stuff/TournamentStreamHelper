@@ -1182,6 +1182,10 @@ class StartGGDataProvider(TournamentDataProvider):
             phase_name = deep_get(_set, "phaseGroup.phase.name")
             round_name = StartGGDataProvider.TranslateRoundName(_set.get("fullRoundText"))
 
+            if (str(phase_name).strip().lower() == "top 8"
+                    and _set.get("fullRoundText") == "Losers Round 1"):
+                round_name = "Losers Eighths"
+
             if deep_get(_set, "phaseGroup.phase.bracketType") == "MATCHMAKING":
                 round_name = ""
 
