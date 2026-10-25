@@ -2,6 +2,7 @@ query SetQuery($id: ID!) {
 	set(id: $id) {
 		id
 		event {
+			id
 			hasTasks
 			videogame {
 				id
@@ -9,6 +10,8 @@ query SetQuery($id: ID!) {
 			isOnline
 		}
 		fullRoundText
+		lPlacement
+		wPlacement
 		round
 		state
 		totalGames
@@ -84,6 +87,7 @@ query SetQuery($id: ID!) {
 		phaseGroup {
 			id
 			phase {
+				id
 				name
 				groupCount
 				bracketType

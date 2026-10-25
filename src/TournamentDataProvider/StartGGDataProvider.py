@@ -741,8 +741,11 @@ class StartGGDataProvider(TournamentDataProvider):
             parsedSetData = self.ParseMatchDataNewApi(setData)
             phaseGroupId = deep_get(setData, "phaseGroup.id")
             if phaseGroupId:
-                parsedSetData["winnerAdvancesTo"] = self._FetchWinnerAdvancesTo(
-                    phaseGroupId, setId)
+                parsedSetData.update(self._FetchSetPlacements(
+                    phaseGroupId, setId,
+                    setData.get("lPlacement"), setData.get("wPlacement"),
+                    deep_get(setData, "event.id"),
+                    deep_get(setData, "phaseGroup.phase.id")))
             return parsedSetData
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -774,9 +777,201 @@ class StartGGDataProvider(TournamentDataProvider):
                 }
         return None
 
-    def _FetchWinnerAdvancesTo(self, phaseGroupId, setId):
+    @staticmethod
+    def _ComputeSetPlacements(setId, sets, advancingPlace=0,
+                              loserPlacement=None, winnerPlacement=None,
+                              eventContext=None):
+        byId = {str(s.get("id")): s for s in sets}
+        winNext = {}
+        loseNext = {}
+        for targetSet in sets:
+            for slot in targetSet.get("slots") or []:
+                if slot.get("prereqType") != "set":
+                    continue
+                try:
+                    placement = int(slot.get("prereqPlacement"))
+                except (TypeError, ValueError):
+                    continue
+                target = winNext if placement == 1 else loseNext
+                target[str(slot.get("prereqId"))] = str(targetSet.get("id"))
+
+        rounds = []
+        losersCounts = {}
+        for s in sets:
+            try:
+                roundNumber = int(s.get("round"))
+            except (TypeError, ValueError):
+                continue
+            rounds.append(roundNumber)
+            isBye = any(slot.get("prereqType") == "bye"
+                        for slot in s.get("slots") or [])
+            if roundNumber < 0 and not isBye:
+                losersCounts[abs(roundNumber)] = losersCounts.get(
+                    abs(roundNumber), 0) + 1
+        lastRound = max(rounds, default=0)
+
+        def eliminatedPlace(s):
+            roundNumber = int(s.get("round"))
+            if roundNumber < 0:
+                return 3 + sum(
+                    count for r, count in losersCounts.items()
+                    if r > abs(roundNumber))
+            if roundNumber == lastRound:
+                return 2
+            return None
+
+        def loserPlace(sid, seen=()):
+            s = byId.get(sid)
+            if s is None or sid in seen:
+                return None
+            if sid in loseNext:
+                return loserPlace(loseNext[sid], seen + (sid,))
+            return eliminatedPlace(s)
+
+        current = byId.get(str(setId))
+        result = {
+            "winnerAdvancesTo": None,
+            "loserEliminatedPlace": None,
+            "winnerGuaranteedPlace": None,
+            "loserAdvancesToNextPhase": False,
+            "winnerAdvancesToNextPhase": False,
+        }
+        if current is None:
+            return StartGGDataProvider._ApplyEventPlacements(
+                result, advancingPlace, loserPlacement, winnerPlacement,
+                True, eventContext)
+
+        nextId = winNext.get(str(setId))
+        if nextId in byId:
+            result["winnerAdvancesTo"] = StartGGDataProvider._FindWinnerAdvancement(
+                setId, [byId[nextId]])
+            result["winnerGuaranteedPlace"] = loserPlace(nextId)
+        elif int(current.get("round")) == lastRound:
+            result["winnerGuaranteedPlace"] = 1
+
+        if str(setId) not in loseNext:
+            result["loserEliminatedPlace"] = eliminatedPlace(current)
+
+        if advancingPlace:
+            # advancingPlace is the worst placement in this phase group that
+            # still progresses to a following phase.
+            loserPlaceValue = result["loserEliminatedPlace"]
+            winnerPlaceValue = result["winnerGuaranteedPlace"]
+            result["loserAdvancesToNextPhase"] = (
+                loserPlaceValue is not None and loserPlaceValue <= advancingPlace)
+            result["winnerAdvancesToNextPhase"] = (
+                winnerPlaceValue is not None and winnerPlaceValue <= advancingPlace)
+
+        return StartGGDataProvider._ApplyEventPlacements(
+            result, advancingPlace, loserPlacement, winnerPlacement,
+            str(setId) not in loseNext, eventContext)
+
+    @staticmethod
+    def _ApplyEventPlacements(result, advancingPlace, loserPlacement,
+                              winnerPlacement, loserEliminated, eventContext):
+        # Set.lPlacement/wPlacement are placements inside the phase group.
+        # In a waterfall event, entrants who progress out of a phase finish
+        # above everyone eliminated in it and in the lower phases, so the
+        # event-wide place is derived from how many entrants finish below.
+        if not eventContext:
+            return result
+
+        def isTerminal(placement):
+            return placement is not None and placement > advancingPlace
+
+        def eventPlace(placement):
+            worseOrEqual = eventContext["lowerTerminal"] + sum(
+                max(0, size - placement + 1)
+                for size in eventContext["groupSizes"])
+            return eventContext["entrants"] - worseOrEqual + 1
+
+        result["loserEliminatedPlace"] = None
+        result["winnerGuaranteedPlace"] = None
+        result["loserAdvancesToNextPhase"] = False
+        result["winnerAdvancesToNextPhase"] = False
+
+        if loserPlacement is not None and loserEliminated:
+            if isTerminal(loserPlacement):
+                result["loserEliminatedPlace"] = eventPlace(loserPlacement)
+            else:
+                result["loserAdvancesToNextPhase"] = True
+
+        if winnerPlacement is not None:
+            if isTerminal(winnerPlacement):
+                result["winnerGuaranteedPlace"] = eventPlace(winnerPlacement)
+            else:
+                result["winnerAdvancesToNextPhase"] = True
+                result["winnerGuaranteedPlace"] = (
+                    eventContext["entrants"]
+                    - eventContext["lowerTerminal"]
+                    - eventContext["currentTerminal"])
+        return result
+
+    EventPhasesQuery = """query EventPhases($id: ID!) {
+  event(id: $id) {
+    numEntrants
+    phases {
+      id
+      phaseOrder
+      numSeeds
+      phaseGroups(query: {perPage: 100}) {
+        nodes {
+          numSeeds
+          progressionsOut {
+            id
+          }
+        }
+      }
+    }
+  }
+}"""
+
+    def _FetchEventContext(self, eventId, phaseId):
+        data = self.QueryRequests(
+            "https://www.start.gg/api/-/gql",
+            type=requests.post,
+            jsonParams={
+                "operationName": "EventPhases",
+                "variables": {"id": eventId},
+                "query": StartGGDataProvider.EventPhasesQuery
+            }
+        )
+        event = deep_get(data, "data.event")
+        if not event:
+            return None
+
+        entrants = event.get("numEntrants")
+        phases = event.get("phases") or []
+        current = next(
+            (p for p in phases if str(p.get("id")) == str(phaseId)), None)
+        if not entrants or current is None:
+            return None
+
+        def terminalCount(phase):
+            groups = deep_get(phase, "phaseGroups.nodes", []) or []
+            progressing = sum(len(g.get("progressionsOut") or [])
+                              for g in groups)
+            return max(0, (phase.get("numSeeds") or 0) - progressing)
+
+        currentOrder = current.get("phaseOrder")
+        return {
+            "entrants": entrants,
+            "lowerTerminal": sum(
+                terminalCount(p) for p in phases
+                if p.get("phaseOrder") < currentOrder),
+            "currentTerminal": terminalCount(current),
+            "groupSizes": [
+                g.get("numSeeds") or 0
+                for g in deep_get(current, "phaseGroups.nodes", []) or []],
+        }
+
+    def _FetchSetPlacements(self, phaseGroupId, setId,
+                            loserPlacement=None, winnerPlacement=None,
+                            eventId=None, phaseId=None):
+        sets = []
         page = 1
         totalPages = 1
+        advancingPlace = 0
 
         while page <= totalPages:
             data = self.QueryRequests(
@@ -796,19 +991,31 @@ class StartGGDataProvider(TournamentDataProvider):
             if data.get("errors"):
                 logger.error(
                     "TournamentPhaseGroupSetsQuery errors while resolving "
-                    f"winner progression for set {setId}: {data.get('errors')}")
+                    f"progression for set {setId}: {data.get('errors')}")
 
-            targetSets = deep_get(data, "data.phaseGroup.sets.nodes", []) or []
-            advancement = StartGGDataProvider._FindWinnerAdvancement(
-                setId, targetSets)
-            if advancement:
-                return advancement
+            for progression in deep_get(
+                    data, "data.phaseGroup.progressionsOut", []) or []:
+                try:
+                    advancingPlace = max(
+                        advancingPlace, int(progression.get("originPlacement")))
+                except (TypeError, ValueError):
+                    pass
 
+            sets.extend(deep_get(data, "data.phaseGroup.sets.nodes", []) or [])
             totalPages = deep_get(
                 data, "data.phaseGroup.sets.pageInfo.totalPages", 1)
             page += 1
 
-        return None
+        eventContext = None
+        if eventId and phaseId:
+            try:
+                eventContext = self._FetchEventContext(eventId, phaseId)
+            except Exception:
+                logger.error(traceback.format_exc())
+
+        return StartGGDataProvider._ComputeSetPlacements(
+            setId, sets, advancingPlace, loserPlacement, winnerPlacement,
+            eventContext)
 
     def _FetchMatchesPage(self, states, page, cancel_event=None):
         if cancel_event is not None and cancel_event.is_set():

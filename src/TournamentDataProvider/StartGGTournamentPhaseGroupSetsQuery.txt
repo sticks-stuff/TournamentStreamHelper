@@ -1,5 +1,8 @@
 query TournamentPhaseGroupSetsQuery($id: ID!, $page: Int!, $perPage: Int!) {
 	phaseGroup(id: $id) {
+		progressionsOut {
+			originPlacement
+		}
 		sets(page: $page, perPage: $perPage, filters: {showByes: true, hideEmpty: false}, sortType: CALL_ORDER) {
 			pageInfo {
 				totalPages

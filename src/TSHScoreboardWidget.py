@@ -1160,6 +1160,18 @@ class TSHScoreboardWidget(QWidget):
             StateManager.Set(
                 f"score.{self.scoreboardNumber}.winner_advances_to",
                 winner_advances_to)
+            StateManager.Set(
+                f"score.{self.scoreboardNumber}.loser_eliminated_place",
+                data.get("loserEliminatedPlace"))
+            StateManager.Set(
+                f"score.{self.scoreboardNumber}.winner_guaranteed_place",
+                data.get("winnerGuaranteedPlace"))
+            StateManager.Set(
+                f"score.{self.scoreboardNumber}.loser_advances_to_next_phase",
+                data.get("loserAdvancesToNextPhase"))
+            StateManager.Set(
+                f"score.{self.scoreboardNumber}.winner_advances_to_next_phase",
+                data.get("winnerAdvancesToNextPhase"))
 
             round_name = data.get("round_name")
             if round_name:
