@@ -138,6 +138,10 @@ class TSHBracketWidget(QDockWidget):
         self.btRefreshPhaseGroup.clicked.connect(self.PhaseGroupChanged)
         TSHHotkeys.signals.refresh_phase_group.connect(self.PhaseGroupChanged)
 
+        self.btRefreshBracket: QPushButton = self.findChild(
+            QPushButton, "btRefreshBracket")
+        self.btRefreshBracket.clicked.connect(self.PhaseGroupChanged)
+
         self.progressionsIn: QSpinBox = self.findChild(
             QSpinBox, "progressionsIn")
         self.progressionsIn.valueChanged.connect(lambda val: [

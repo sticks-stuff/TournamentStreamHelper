@@ -148,6 +148,13 @@
         </property>
        </widget>
       </item>
+      <item row="2" column="5">
+       <widget class="QPushButton" name="btRefreshBracket">
+        <property name="text">
+         <string>Refresh Bracket</string>
+        </property>
+       </widget>
+      </item>
       <item row="2" column="0">
        <layout class="QHBoxLayout" name="horizontalLayout">
         <item>
