@@ -591,40 +591,36 @@ class TSHTeamBattleWidget(QDockWidget):
     # =====================================================
     # TEAM 1 STOCK CONTROL
     # =====================================================
+    def GetActivePlayer(self, team: int):
+        players = self.team1playerWidgets if team == 1 else self.team2playerWidgets
+        for p in players:
+            if p.IsActive():
+                return p
+        return None
+
+    # Moves the active player's stock/score spinner of the team up or down by 1
+    # (the spinner clamps to its own min/max).
+    def _ScoreChange(self, team: int, up: bool):
+        target = self.GetActivePlayer(team)
+        if target is None:
+            return
+        spinner = target.dynamicSpinner
+        spinner.setValue(spinner.value() + (1 if up else -1))
+
     def T1_Stock_Up(self):
-        if self.battleMode is TSHTeamBattleModeEnum.STOCK_POOL:
-            # TODO: Tick Down Stock for Team 2
-            return
-        elif self.battleMode is TSHTeamBattleModeEnum.FIRST_TO:
-            # TODO: Tick Up Score for Team 1
-            return
+        self._ScoreChange(1, True)
         
     def T1_Stock_Down(self):
-        if self.battleMode is TSHTeamBattleModeEnum.STOCK_POOL:
-            # TODO: Tick Up Stock for Team 2
-            return
-        elif self.battleMode is TSHTeamBattleModeEnum.FIRST_TO:
-            # TODO: Tick Down Score for Team 1
-            return
+        self._ScoreChange(1, False)
 
     # =====================================================
     # TEAM 2 STOCK CONTROL
     # =====================================================
     def T2_Stock_Up(self):
-        if self.battleMode is TSHTeamBattleModeEnum.STOCK_POOL:
-            # TODO: Tick Down Stock for Team 1
-            return
-        elif self.battleMode is TSHTeamBattleModeEnum.FIRST_TO:
-            # TODO: Tick Up Score for Team 2
-            return
+        self._ScoreChange(2, True)
         
     def T2_Stock_Down(self):
-        if self.battleMode is TSHTeamBattleModeEnum.STOCK_POOL:
-            # TODO: Tick Up Stock for Team 1
-            return
-        elif self.battleMode is TSHTeamBattleModeEnum.FIRST_TO:
-            # TODO: Tick Down Score for Team 2
-            return
+        self._ScoreChange(2, False)
     
     # =====================================================
     # EXPORTS

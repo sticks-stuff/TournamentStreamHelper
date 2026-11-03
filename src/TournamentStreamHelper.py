@@ -459,7 +459,7 @@ class Window(QMainWindow):
         self.dockWidgets.append(commentary)
 
         self.webserver = WebServer(
-            parent=self, stageWidget=self.stageWidget, commentaryWidget=commentary)
+            parent=self, stageWidget=self.stageWidget, commentaryWidget=commentary, teamBattleWidget=teamBattle)
         self.webserver.start()
         self.signals.GameChanged.connect(self.webserver.ws_program_state)
         self.signals.GameChanged.connect(self.webserver.ws_get_characters)

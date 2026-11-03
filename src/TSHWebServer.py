@@ -53,13 +53,14 @@ class WebServer(QThread):
     app.config['CORS_HEADERS'] = 'Content-Type'
     actions = None
 
-    def __init__(self, parent=None, stageWidget=None, commentaryWidget: TSHCommentaryWidget=None) -> None:
+    def __init__(self, parent=None, stageWidget=None, commentaryWidget: TSHCommentaryWidget=None, teamBattleWidget=None) -> None:
         super().__init__(parent)
         WebServer.actions = WebServerActions(
             parent=parent,
             scoreboard=TSHScoreboardManager.instance,
             stageWidget=stageWidget,
-            commentaryWidget=commentaryWidget
+            commentaryWidget=commentaryWidget,
+            teamBattleWidget=teamBattleWidget
         )
 
         StateManager.signals.state_updated.connect(WebServer.on_program_state_update)
@@ -214,6 +215,27 @@ class WebServer(QThread):
     @socketio.on('score')
     def ws_post_score(message):
         WebServer.ws_emit('score', WebServer.actions.post_score(message))
+
+    # Crew/Team battle: score up/down for the active player of the given team
+    @app.route('/team-battle-team<team>-scoreup')
+    def team_battle_scoreup(team):
+        return WebServer.actions.team_battle_score(team, True)
+
+    @app.route('/team-battle-team<team>-scoredown')
+    def team_battle_scoredown(team):
+        return WebServer.actions.team_battle_score(team, False)
+
+    @socketio.on('team_battle_scoreup')
+    def ws_team_battle_scoreup(message):
+        info = orjson.loads(message) if isinstance(message, (str, bytes)) else message
+        WebServer.ws_emit('team_battle_scoreup',
+             WebServer.actions.team_battle_score(info.get("team"), True))
+
+    @socketio.on('team_battle_scoredown')
+    def ws_team_battle_scoredown(message):
+        info = orjson.loads(message) if isinstance(message, (str, bytes)) else message
+        WebServer.ws_emit('team_battle_scoredown',
+             WebServer.actions.team_battle_score(info.get("team"), False))
 
     # Ticks score of Team specified up by 1 point
     @app.route('/scoreboard<scoreboardNumber>-team<team>-scoreup')

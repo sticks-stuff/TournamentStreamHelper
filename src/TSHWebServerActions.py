@@ -35,8 +35,9 @@ class ScoreboardNotAvailable(Exception):
 
 
 class WebServerActions(QThread):
-    def __init__(self, parent=None, scoreboard=None, stageWidget=None, commentaryWidget: TSHCommentaryWidget=None) -> None:
+    def __init__(self, parent=None, scoreboard=None, stageWidget=None, commentaryWidget: TSHCommentaryWidget=None, teamBattleWidget=None) -> None:
         super().__init__(parent)
+        self.teamBattleWidget = teamBattleWidget
         self.scoreboard = scoreboard
         self.stageWidget = stageWidget
         self.commentaryWidget = commentaryWidget
@@ -197,6 +198,17 @@ class WebServerActions(QThread):
             self._get_scoreboard(scoreboard).CommandScoreChange(0, -1)
         else:
             self._get_scoreboard(scoreboard).CommandScoreChange(1, -1)
+        return "OK"
+
+    @gui_thread_sync
+    def team_battle_score(self, team, up):
+        if self.teamBattleWidget is None or str(team) not in ("1", "2"):
+            abort(400, "Invalid team")
+        signals = self.teamBattleWidget.signals
+        if str(team) == "1":
+            (signals.team1_stock_up if up else signals.team1_stock_down).emit()
+        else:
+            (signals.team2_stock_up if up else signals.team2_stock_down).emit()
         return "OK"
 
     def team_color(self, scoreboard, team, color):
