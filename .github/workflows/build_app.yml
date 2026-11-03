@@ -12,7 +12,6 @@ jobs:
   build_locale:
     name: Generate Locale Files
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' || startsWith( github.ref, 'refs/heads/feature/' ) || startsWith( github.ref, 'refs/heads/fix/' ) }}
     strategy:
       fail-fast: false
 
@@ -58,7 +57,6 @@ jobs:
   build_frontend:
     name: build_frontend
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' || startsWith( github.ref, 'refs/heads/feature/' ) || startsWith( github.ref, 'refs/heads/fix/' ) }}
     outputs:
       frontend-build: ${{ steps.upload-frontend.outputs.artifact-id }}
     steps:
@@ -100,7 +98,6 @@ jobs:
     needs: ['build_locale', 'build_frontend']
     name: Generate Windows Release
     runs-on: ${{ matrix.os }}
-    if: ${{ github.ref == 'refs/heads/main' || startsWith( github.ref, 'refs/heads/feature/' ) || startsWith( github.ref, 'refs/heads/fix/' ) }}
     strategy:
       fail-fast: false
       matrix:
